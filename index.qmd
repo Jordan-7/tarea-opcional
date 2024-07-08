@@ -1,0 +1,144 @@
+---
+title: "tarea"
+format: dashboard
+editor: visual
+lang: es
+theme: flatly
+---
+
+
+```{r setup, include=FALSE}
+#| label: carga-librerias
+#| warning: false
+#| message: false
+
+
+library(readr)
+library(tidyr)
+library(knitr)
+library(plotly)
+library(DT)
+library(sf)
+library(terra)
+library(leaflet)
+library(leaflet.extras)
+library(leafem)
+library(viridisLite)
+library(dplyr)
+```
+
+
+
+```{r setup, include=FALSE}
+#| label: carga-datos
+#| warning: false
+#| message: false
+
+regiones_socioeconomicas <- st_read(
+    "regiones-socioeconomicas.gpkg",
+    quiet = TRUE 
+  )|>
+  st_transform(4326)
+
+registros_reptiles <-
+  st_read(
+    "registros-reptiles.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude", # columna de longitud decimal
+      "Y_POSSIBLE_NAMES=decimalLatitude"  # columna de latitud decimal
+    ),
+    quiet = TRUE
+  )
+st_crs(registros_reptiles) <- 4326
+
+especies_reptiles <- st_read("especies-reptiles.csv")
+st_crs(registros_reptiles) <- 4326
+```
+
+
+```{r}
+#| label: unir
+#| warning: false
+#| message: false
+
+
+# Unir los datos espaciales de registros con las regiones socioeconómicas
+regist_socio <- st_join(registros_reptiles, regiones_socioeconomicas)
+datos_combinados_registros_regiones <- as.data.frame(regist_socio )
+
+# union de la columna con los datos LC y registros reptiles, Filtrado de lagartos y serpientes de la familia squamata
+registros_reptilesLC <- registros_reptiles %>%
+  left_join(especies_reptiles %>% select(species, iucnRedListCategory), by = "species") %>%
+  filter(class == "Squamata")
+
+
+st_crs(registros_reptilesLC) <- 4326
+```
+
+
+
+# Mapa
+
+```{r}
+#| label: mapa-riqueza
+#| title: mapa de riqueza de especies de preocupación menor de la clase Squamata en regiones socioeconómicas de Costa Rica
+#| warning: false
+#| message: false
+
+# Conteo de la cantidad de especies de Iguanidae en regiones socioeconómicas
+riqueza_de_especies_LC <- regist_socio %>%
+  st_drop_geometry() %>%
+  group_by(region) %>%
+  summarize(riqueza = n_distinct(species, na.rm = TRUE))
+
+# Crear paleta de colores para la riqueza de especies de LC
+colores_riqueza_especies <- colorNumeric(
+  palette = "Reds",
+  domain = riqueza_de_especies_LC$riqueza,
+  na.color = "transparent"
+)
+
+# Crear paleta de colores para las familias
+colores_especies <- colorFactor(
+  palette = viridis::viridis(length(unique(registros_reptilesLC$family))),
+  domain = registros_reptilesLC$family
+)
+
+# Mapa Leaflet
+leaflet() %>%
+  setView(lng = -84.19452, lat = 9.572735, zoom = 8) %>%
+  addTiles(group = "Mapa general (OpenStreetMap)") %>%
+  addProviderTiles(providers$Esri.WorldImagery, group = "Imágenes satelitales (ESRI World Imagery)") %>%
+  addPolygons(
+    data = regiones_socioeconomicas,
+    fillColor = ~colores_riqueza_especies(riqueza_de_especies_LC$riqueza[match(region, regiones_socioeconomicas$region)]),
+    fillOpacity = 0.8,
+    color = "black",
+    stroke = TRUE,
+    weight = 1.0,
+    label = ~paste("<strong>Región:</strong>", region, "<br/><strong>Riqueza de especies LC:</strong>", riqueza_de_especies_LC$riqueza[match(region, riqueza_de_especies_LC$region)]),
+    group = "riqueza de especies de preocupación menor de la clase Squamata"
+  ) %>%
+  addScaleBar(position = "bottomleft", options = scaleBarOptions(imperial = FALSE)) %>%
+  addLegend(
+    position = "bottomleft",
+    pal = colores_riqueza_especies,
+    values = riqueza_de_especies_LC$riqueza,
+    group = "Riqueza de especies",
+    title = "Riqueza de especies"
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = colores_especies,
+    values = registros_reptilesLC$family,
+    title = "Especies",
+    group = "Registros de presencia"
+  ) %>%
+  addLayersControl(
+    baseGroups = c("Mapa general (OpenStreetMap)", "Imágenes satelitales (ESRI World Imagery)"),
+    overlayGroups = c("riqueza de especies de preocupación menor de la clase Squamata", "Registros de presencia")
+  ) %>%
+  hideGroup("Registros de presencia")
+```
+
+
